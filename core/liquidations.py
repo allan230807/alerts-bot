@@ -1,103 +1,148 @@
-import math
 import requests
+import numpy as np
 
-def obtener_datos_cuantitativos_libro(simbolo, limite=100):
-    url = f"https://fapi.binance.com/fapi/v1/depth?symbol={simbolo}&limit={limite}"
+# Configuración del modelo
+VELAS_PERIODO = 20
+SIMULACIONES_MC = 2000
+PASOS_FUTUROS = 12 # Proyectamos 12 velas (1 hora en TF 5m)
+PROBABILIDAD_MINIMA_MC = 70.0 # Porcentaje mínimo de éxito en Monte Carlo
+
+def obtener_klines(symbol, interval="5m", limit=30):
+    """Obtiene el histórico de velas para calcular medias, volatilidad y volumen."""
+    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            bids = data.get("bids", [])
-            asks = data.get("asks", [])
-            
-            if not bids or not asks:
-                return None, None
-
-            best_bid = float(bids[0][0])
-            best_ask = float(asks[0][0])
-            mid_price = (best_bid + best_ask) / 2.0
-
-            bid_weighted_sum = 0.0
-            total_bid_vol = 0.0
-            for precio_str, cantidad_str in bids:
-                p = float(precio_str)
-                q = float(cantidad_str)
-                distancia = abs(mid_price - p) / mid_price
-                peso = 1.0 / (1.0 + distancia * 100)
-                bid_weighted_sum += q * peso
-                total_bid_vol += q
-
-            ask_weighted_sum = 0.0
-            total_ask_vol = 0.0
-            for precio_str, cantidad_str in asks:
-                p = float(precio_str)
-                q = float(cantidad_str)
-                distancia = abs(p - mid_price) / mid_price
-                peso = 1.0 / (1.0 + distancia * 100)
-                ask_weighted_sum += q * peso
-                total_ask_vol += q
-
-            denominador = bid_weighted_sum + ask_weighted_sum
-            obi = (bid_weighted_sum - ask_weighted_sum) / denominador if denominador > 0 else 0.0
-
-            return obi, {"bids": total_bid_vol, "asks": total_ask_vol}
+        res = requests.get(url, timeout=5)
+        if res.status_code == 200:
+            # Formato: [Open time, Open, High, Low, Close, Volume, ...]
+            return res.json()
     except Exception:
         pass
-    return None, None
+    return None
 
-def calcular_zscore_y_volatilidad(simbolo):
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={simbolo}&interval=5m&limit=25"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            velas = response.json()
-            if len(velas) < 20:
-                return None, None, None
-
-            closes = [float(v[4]) for v in velas]
-            highs = [float(v[2]) for v in velas]
-            lows = [float(v[3]) for v in velas]
-
-            sma = sum(closes[-20:]) / 20.0
-            varianza = sum((c - sma) ** 2 for c in closes[-20:]) / 20.0
-            std_dev = math.sqrt(varianza) if varianza > 0 else 0.00000001
-
-            precio_actual = closes[-1]
-            z_score = (precio_actual - sma) / std_dev
-
-            true_ranges = [max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1])) for i in range(1, len(velas))]
-            atr = sum(true_ranges[-14:]) / 14.0 if true_ranges else 0.0
-
-            return z_score, atr, precio_actual
-    except Exception:
-        pass
-    return None, None, None
-
-def analizar_modelo_reversion(top_tokens):
-    resultados = []
+def filtro_correlacion_btc():
+    """Verifica si BTC está en un movimiento direccional violento (ruido sistémico)."""
+    klines_btc = obtener_klines("BTCUSDT", limit=5)
+    if not klines_btc:
+        return False
     
-    for token in top_tokens:
-        simbolo = token["symbol"]
-        z_score, atr, precio = calcular_zscore_y_volatilidad(simbolo)
-        obi, volumenes = obtener_datos_cuantitativos_libro(simbolo)
-        
-        if z_score is not None and obi is not None:
-            alerta_reversion = None
-            
-            if z_score >= 2.2 and obi < -0.15:
-                alerta_reversion = f"📉 OPORTUNIDAD DE REVERSIÓN A LA MEDIA (SHORT) | Z-Score: +{z_score:.2f}σ | OBI Estructural: {obi:.2f} (Absorción de Ask)"
-            elif z_score <= -2.2 and obi > 0.15:
-                alerta_reversion = f"📈 OPORTUNIDAD DE REVERSIÓN A LA MEDIA (LONG) | Z-Score: {z_score:.2f}σ | OBI Estructural: +{obi:.2f} (Absorción de Bid)"
+    precio_inicio = float(klines_btc[0][4])
+    precio_fin = float(klines_btc[-1][4])
+    variacion = abs((precio_fin - precio_inicio) / precio_inicio) * 100
+    
+    # Si BTC se movió más de 0.8% en los últimos 25 min, bloqueamos altcoins.
+    return variacion > 0.8 
 
-            resultados.append({
-                "symbol": simbolo,
-                "change_hour": token["change_hour"],
-                "price": precio,
-                "z_score": z_score,
-                "obi": obi,
-                "bid_liquidity": volumenes["bids"],
-                "ask_liquidity": volumenes["asks"],
-                "reversion_signal": alerta_reversion
-            })
+def simulacion_monte_carlo(precios_cierre, precio_actual, media_objetivo):
+    """
+    Ejecuta una simulación estocástica de Monte Carlo (GBM).
+    Retorna la probabilidad (%) de que el precio alcance la media.
+    """
+    retornos = np.diff(precios_cierre) / precios_cierre[:-1]
+    mu = np.mean(retornos)
+    sigma = np.std(retornos)
+    
+    dt = 1 # 1 paso = 1 vela
+    exitos = 0
+    
+    # Distancia al objetivo y stop loss implícito (riesgo asimétrico 1:2)
+    distancia_media = abs(media_objetivo - precio_actual)
+    
+    for _ in range(SIMULACIONES_MC):
+        precio_simulado = precio_actual
+        trayectoria_exitosa = False
+        
+        for _ in range(PASOS_FUTUROS):
+            Z = np.random.normal(0, 1)
+            choque = (mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * Z
+            precio_simulado *= np.exp(choque)
             
-    return resultados
+            # Condición de éxito: El precio simulado cruza la media objetivo
+            if (precio_actual < media_objetivo and precio_simulado >= media_objetivo) or \
+               (precio_actual > media_objetivo and precio_simulado <= media_objetivo):
+                trayectoria_exitosa = True
+                break
+                
+            # Condición de fracaso temprano (Stop loss: se aleja el doble de la distancia)
+            if abs(precio_simulado - precio_actual) > (distancia_media * 2):
+                break
+                
+        if trayectoria_exitosa:
+            exitos += 1
+            
+    return (exitos / SIMULACIONES_MC) * 100
+
+def analizar_modelo_reversion(top_bruto):
+    """
+    Aplica filtros de liquidez, agotamiento de volumen y Monte Carlo.
+    """
+    perfiles_cuantificados = []
+    
+    # 1. Filtro sistémico: Si BTC está colapsando o explotando, no operamos reversiones de altcoins.
+    mercado_correlacionado = filtro_correlacion_btc()
+
+    for activo in top_bruto:
+        symbol = activo["symbol"]
+        precio_actual = activo["price"]
+        
+        # Saltamos el análisis de altcoins si BTC está absorbiendo toda la liquidez
+        if mercado_correlacionado and symbol != "BTCUSDT":
+            continue
+
+        klines = obtener_klines(symbol, limit=VELAS_PERIODO + 5)
+        if not klines:
+            continue
+            
+        cierres = np.array([float(k[4]) for k in klines])
+        volumenes = np.array([float(k[5]) for k in klines])
+        
+        # Ventana de análisis
+        cierres_recientes = cierres[-VELAS_PERIODO:]
+        media = np.mean(cierres_recientes)
+        desviacion = np.std(cierres_recientes)
+        
+        if desviacion == 0:
+            continue
+            
+        z_score = (precio_actual - media) / desviacion
+        senal = None
+        prob_mc = 0.0
+        
+        # Evaluamos extremos estadísticos (Umbral |Z| > 2.5 para mayor precisión)
+        if abs(z_score) >= 2.5:
+            # 2. Filtro de Agotamiento de Volumen (Volume Exhaustion)
+            # Validamos que el volumen de la última vela cerrada sea menor a la vela previa de expansión.
+            vol_actual = volumenes[-1]
+            vol_previo = volumenes[-2]
+            agotamiento = vol_actual < (vol_previo * 0.8) # El volumen debe haber caído al menos 20%
+            
+            # 3. Order Block / Estructura (Simulado con rechazo de mechas)
+            mecha_superior = float(klines[-1][2]) - max(float(klines[-1][1]), float(klines[-1][4]))
+            mecha_inferior = min(float(klines[-1][1]), float(klines[-1][4])) - float(klines[-1][3])
+            cuerpo = abs(float(klines[-1][4]) - float(klines[-1][1]))
+            
+            rechazo_bajista = mecha_superior > (cuerpo * 1.5)
+            rechazo_alcista = mecha_inferior > (cuerpo * 1.5)
+
+            if z_score <= -2.5 and agotamiento and rechazo_alcista:
+                # 4. Motor de Probabilidad: Simulación Monte Carlo para Long
+                prob_mc = simulacion_monte_carlo(cierres, precio_actual, media)
+                if prob_mc >= PROBABILIDAD_MINIMA_MC:
+                    senal = f"🟢 LONG SETUP (Reversión Alcista) | Probabilidad MC: {prob_mc:.1f}%"
+                    
+            elif z_score >= 2.5 and agotamiento and rechazo_bajista:
+                # 4. Motor de Probabilidad: Simulación Monte Carlo para Short
+                prob_mc = simulacion_monte_carlo(cierres, precio_actual, media)
+                if prob_mc >= PROBABILIDAD_MINIMA_MC:
+                    senal = f"🔴 SHORT SETUP (Reversión Bajista) | Probabilidad MC: {prob_mc:.1f}%"
+
+        perfiles_cuantificados.append({
+            "symbol": symbol,
+            "price": precio_actual,
+            "change_hour": activo["change_hour"],
+            "z_score": z_score,
+            "obi": 0, # Mantenido por compatibilidad de estructura, puedes inyectar el Order Book real aquí
+            "reversion_signal": senal,
+            "mc_probability": prob_mc
+        })
+        
+    return perfiles_cuantificados

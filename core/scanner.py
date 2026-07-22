@@ -2,6 +2,7 @@ import time
 import datetime
 import requests
 from liquidations import analizar_modelo_reversion
+from notifier import enviar_alerta_telegram  # <-- Agregamos la importación del notificador
 
 def obtener_precios_actuales():
     url = "https://fapi.binance.com/fapi/v1/ticker/price"
@@ -78,6 +79,19 @@ def ejecutar_motor_cuantitativo(umbral_zscore_base=2.2):
                             if p["reversion_signal"]:
                                 print(f"  🚨 {p['reversion_signal']}")
                                 print(f"    ↳ Activo: {p['symbol']} | Precio: {p['price']} | Z-Score: {z_str} | OBI: {obi_str}\n")
+                                
+                                # <-- NUEVO BLOQUE: Envío de la alerta a Telegram con Monte Carlo -->
+                                prob_mc = p.get("mc_probability", 0.0)
+                                mensaje_telegram = (
+                                    f"🚨 *ALERTA QUANT DE REVERSIÓN* 🚨\n\n"
+                                    f"🔹 *Activo:* `{p['symbol']}`\n"
+                                    f"💰 *Precio:* `{p['price']}`\n"
+                                    f"📊 *Z-Score:* `{z_str}`\n"
+                                    f"🎲 *Probabilidad MC:* `{prob_mc:.1f}%`\n\n"
+                                    f"_{p['reversion_signal']}_"
+                                )
+                                enviar_alerta_telegram(mensaje_telegram)
+                                # <---------------------------------------------------------------->
                             else:
                                 print(f"  🔹 {p['symbol']} | Cambio Hora: {p['change_hour']:+.2f}% | Precio: {p['price']} | Z-Score: {z_str} | OBI: {obi_str}")
 
