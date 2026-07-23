@@ -1,24 +1,60 @@
-# Quant Bot - Proyecto Cuantitativo de Futuros
+Markdown
+<div align="center">
 
-Bot de análisis cuantitativo en Python para mercados de criptomonedas (Binance Futures), diseñado para procesar métricas como Z-Score, OBI (Order Book Imbalance) y simulaciones de Monte Carlo, enviando alertas automatizadas a Telegram cada 15 minutos.
+# ⚡ Quant Market Alerts Bot
 
-## Estado del Proyecto: En Pausa / Archivado
+> **Sistema automatizado de monitoreo cuantitativo y alertas de mercado en tiempo real.**
 
-El despliegue automatizado de este bot se encuentra detenido y el workflow de GitHub Actions ha sido deshabilitado. 
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![Flask](https://img.shields.io/badge/Flask-3.0-lightgrey?style=for-the-badge&logo=flask&logoColor=black)](https://flask.palletsprojects.com/)
+[![Render](https://img.shields.io/badge/Render-Deployed-success?style=for-the-badge&logo=render&logoColor=white)](https://render.com/)
+[![Telegram](https://img.shields.io/badge/Telegram-Bot-blue?style=for-the-badge&logo=telegram&logoColor=white)](https://telegram.org/)
 
-## ¿Qué nos detuvo? (Obstáculos Técnicos)
+</div>
 
-Durante el proceso de configuración en la nube, nos topamos con una serie de bloqueos técnicos insalvables bajo esquemas gratuitos:
+---
 
-1. **Restricciones Geográficas (Geoblocking):**
-   - Bybit y Binance prohíben el acceso a sus APIs desde direcciones IP ubicadas en Estados Unidos.
-   - Los servidores donde corre GitHub Actions se encuentran en EE. UU., lo que generaba errores constantes de conexión al intentar consultar los endpoints de futuros (`fapi`).
+## 🚀 Sobre el Proyecto
 
-2. **Barreras en Infraestructuras Cloud Gratuitas:**
-   - **Render y AWS Lambda:** Exigen tarjetas de crédito bancarias tradicionales para la verificación de identidad a través de pasarelas de pago, descartando y rechazando tarjetas virtuales o prepagadas (como Zinli).
-   - **Hugging Face Spaces:** Modificó sus políticas de uso gratuito, limitando el cómputo a páginas estáticas y cobrando por la ejecución de entornos de backend en Python.
-   - **Proxies públicos:** Descartados por su alta inestabilidad y porque los sistemas de seguridad (WAF/Cloudflare) de los exchanges terminan bloqueándolos de inmediato.
+**Quant Market Alerts Bot** es una herramienta de trading cuantitativo diseñada para escanear de manera autónoma los activos del mercado, procesar modelos matemáticos y estadísticos de reversión y liquidaciones, y despachar alertas automatizadas directamente a un canal o chat de Telegram. 
 
-## Conclusión
+El sistema corre de forma ininterrumpida 24/7 en la nube mediante un servicio web en Render sincronizado con un planificador de tareas interno.
 
-El código base y la lógica cuantitativa desarrollada se mantienen seguros en el repositorio. Hoy el proyecto queda pausado para avanzar hacia un nuevo objetivo.
+---
+
+## ✨ Características Principales
+
+* **🕒 Escaneo Automatizado:** Ejecución programada cada hora mediante `APScheduler` para evaluar las condiciones del mercado sin intervención manual.
+* **📱 Alertas en Tiempo Real:** Envío inmediato de señales de alta probabilidad directo a Telegram.
+* **🛡️ Arquitectura Robusta:** Diseñado bajo un patrón modular con separación de responsabilidades entre el servidor web y los motores de análisis cuantitativo.
+* **☁️ Alta Disponibilidad:** Desplegado en la nube con soporte para servidores WSGI (Gunicorn) y endpoints de control de estado (*health check*).
+
+---
+
+## 🛠️ Tecnologías Utilizadas
+
+* **Lenguaje:** Python
+* **Framework Web:** Flask
+* **Planificación:** APScheduler & Pytz
+* **Despliegue & Servidor:** Render & Gunicorn
+* **Control de Versiones:** Git / GitHub (`allan230807`)
+
+---
+
+## 📂 Estructura del Repositorio
+
+```text
+alerts-bot/
+│
+├── core/
+│   ├── __init__.py
+│   ├── bot_server.py        # Motor principal de análisis cuantitativo
+│   ├── liquidations.py      # Modelos de análisis de liquidaciones y reversión
+│   ├── scanner.py           # Escáner de mercado
+│   └── users_db.py          # Gestión de base de datos / usuarios
+│
+├── .env                     # Variables de entorno locales (Privado)
+├── .gitignore
+├── app.py                   # Servidor web Flask y programador de tareas (Scheduler)
+├── README.md                # Documentación del proyecto
+└── requirements.txt         # Dependencias del proyecto
