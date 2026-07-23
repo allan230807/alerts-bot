@@ -2,16 +2,26 @@ import time
 import datetime
 import requests
 from liquidations import analizar_modelo_reversion
-from notifier import enviar_alerta_telegram  # <-- Agregamos la importación del notificador
+from notifier import enviar_alerta_telegram
 
 def obtener_precios_actuales():
-    url = "https://fapi.binance.com/fapi/v1/ticker/price"
+    # URL actualizada al endpoint libre de restricciones de geolocalización en la nube
+    url = "https://fapi.binance.vision/fapi/v1/ticker/price"
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         if response.status_code == 200:
             return {
                 item["symbol"]: float(item["price"]) 
                 for item in response.json() 
+                if item["symbol"].endswith("USDT") and "_" not in item["symbol"]
+            }
+        # Fallback de respaldo al dominio general de visión
+        url_alt = "https://data-api.binance.vision/api/v3/ticker/price"
+        response_alt = requests.get(url_alt, timeout=10)
+        if response_alt.status_code == 200:
+            return {
+                item["symbol"]: float(item["price"]) 
+                for item in response_alt.json() 
                 if item["symbol"].endswith("USDT") and "_" not in item["symbol"]
             }
     except Exception as e:
@@ -80,7 +90,6 @@ def ejecutar_motor_cuantitativo(umbral_zscore_base=2.2):
                                 print(f"  🚨 {p['reversion_signal']}")
                                 print(f"    ↳ Activo: {p['symbol']} | Precio: {p['price']} | Z-Score: {z_str} | OBI: {obi_str}\n")
                                 
-                                # <-- NUEVO BLOQUE: Envío de la alerta a Telegram con Monte Carlo -->
                                 prob_mc = p.get("mc_probability", 0.0)
                                 mensaje_telegram = (
                                     f"🚨 *ALERTA QUANT DE REVERSIÓN* 🚨\n\n"
@@ -91,7 +100,6 @@ def ejecutar_motor_cuantitativo(umbral_zscore_base=2.2):
                                     f"_{p['reversion_signal']}_"
                                 )
                                 enviar_alerta_telegram(mensaje_telegram)
-                                # <---------------------------------------------------------------->
                             else:
                                 print(f"  🔹 {p['symbol']} | Cambio Hora: {p['change_hour']:+.2f}% | Precio: {p['price']} | Z-Score: {z_str} | OBI: {obi_str}")
 

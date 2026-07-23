@@ -9,21 +9,26 @@ PASOS_FUTUROS = 12 # Proyectamos 12 velas (3 horas en TF 15m)
 PROBABILIDAD_MINIMA_MC = 70.0 # Porcentaje mínimo de éxito en Monte Carlo
 
 def obtener_klines(symbol, interval=INTERVALO_VELAS, limit=30):
-    """Obtiene el histórico de velas en temporalidad de 15m."""
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    """Obtiene el histórico de velas en temporalidad de 15m usando el endpoint libre de restricciones en la nube."""
+    url = f"https://dapi.binance.vision/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(url, timeout=10)
         if res.status_code == 200:
             return res.json()
+        # Fallback alternativo al endpoint general de visión si el dapi falla
+        url_alt = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        res_alt = requests.get(url_alt, timeout=10)
+        if res_alt.status_code == 200:
+            return res_alt.json()
     except Exception:
         pass
     return None
 
 def obtener_obi(symbol, limit=20):
-    """Consulta el Order Book de Binance y calcula el OBI real."""
-    url = f"https://fapi.binance.com/fapi/v1/depth?symbol={symbol}&limit={limit}"
+    """Consulta el Order Book de Binance y calcula el OBI real usando endpoints seguros para la nube."""
+    url = f"https://fapi.binance.vision/fapi/v1/depth?symbol={symbol}&limit={limit}"
     try:
-        res = requests.get(url, timeout=5)
+        res = requests.get(url, timeout=10)
         if res.status_code == 200:
             data = res.json()
             bids_vol = sum([float(item[1]) for item in data.get("bids", [])])
