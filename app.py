@@ -25,7 +25,7 @@ def tarea_programada():
 
 # Configuramos el Scheduler (se ejecuta cada 1 hora)
 scheduler = BackgroundScheduler(timezone=pytz.utc)
-scheduler.add_job(func=tarea_programada, trigger="interval", minutes=1)
+scheduler.add_job(func=tarea_programada, trigger="interval", hours=1)
 scheduler.start()
 
 # Ruta Web requerida por Render para mantener el servicio activo
