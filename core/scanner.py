@@ -5,7 +5,7 @@ from liquidations import analizar_modelo_reversion
 from notifier import enviar_alerta_telegram
 
 def obtener_precios_actuales():
-    url = "https://fapi.binance.vision/fapi/v1/ticker/price"
+    url = "https://fapi.binance.com/fapi/v1/ticker/price"
     try:
         response = requests.get(url, timeout=(3, 5))
         if response.status_code == 200:
@@ -32,7 +32,6 @@ def ejecutar_motor_cuantitativo(umbral_zscore_base=2.2):
                 precios_base_hora.clear()
                 hora_actual_registrada = ahora.hour
 
-            # Problema corregido: Sintaxis de strftime corregida en el print
             print(f"\n--- Escaneo Cuantitativo Futuros USDT [{ahora.strftime('%Y-%m-%d %H:%M:%S')}] ---")
             
             try:
@@ -97,7 +96,6 @@ def ejecutar_motor_cuantitativo(umbral_zscore_base=2.2):
             else:
                 print("⚠️ No se pudieron obtener precios en este ciclo. Reintentando en el próximo intervalo...")
 
-            # Sincronización robusta de ciclos
             ahora_fin_ciclo = datetime.datetime.now()
             minuto_actual = ahora_fin_ciclo.minute
             minuto_base = (minuto_actual // 5) * 5

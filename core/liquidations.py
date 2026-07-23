@@ -8,40 +8,32 @@ PASOS_FUTUROS = 12
 PROBABILIDAD_MINIMA_MC = 70.0
 
 def obtener_klines(symbol, interval=INTERVALO_VELAS, limit=30):
-    """Obtiene el histórico de velas con fallback automático si falla el DNS."""
-    endpoints = [
-        f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}",
-        f"https://fapi.binance.vision/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    ]
-    for url in endpoints:
-        try:
-            res = requests.get(url, timeout=(3, 5))
-            if res.status_code == 200:
-                return res.json()
-        except Exception:
-            continue
+    """Obtiene el histórico de velas usando únicamente la API oficial."""
+    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        res = requests.get(url, timeout=(3, 5))
+        if res.status_code == 200:
+            return res.json()
+    except Exception as e:
+        print(f"⚠️ Error obteniendo klines para {symbol}: {e}")
     return None
 
 def obtener_obi(symbol, limit=20):
-    """Consulta el Order Book con fallback automático."""
-    endpoints = [
-        f"https://fapi.binance.com/fapi/v1/depth?symbol={symbol}&limit={limit}",
-        f"https://fapi.binance.vision/fapi/v1/depth?symbol={symbol}&limit={limit}"
-    ]
-    for url in endpoints:
-        try:
-            res = requests.get(url, timeout=(3, 5))
-            if res.status_code == 200:
-                data = res.json()
-                bids_vol = sum([float(item[1]) for item in data.get("bids", [])])
-                asks_vol = sum([float(item[1]) for item in data.get("asks", [])])
-                
-                total_vol = bids_vol + asks_vol
-                if total_vol == 0:
-                    return 0.0
-                return round((bids_vol - asks_vol) / total_vol, 4)
-        except Exception:
-            continue
+    """Consulta el Order Book usando únicamente la API oficial."""
+    url = f"https://fapi.binance.com/fapi/v1/depth?symbol={symbol}&limit={limit}"
+    try:
+        res = requests.get(url, timeout=(3, 5))
+        if res.status_code == 200:
+            data = res.json()
+            bids_vol = sum([float(item[1]) for item in data.get("bids", [])])
+            asks_vol = sum([float(item[1]) for item in data.get("asks", [])])
+            
+            total_vol = bids_vol + asks_vol
+            if total_vol == 0:
+                return 0.0
+            return round((bids_vol - asks_vol) / total_vol, 4)
+    except Exception as e:
+        print(f"⚠️ Error obteniendo OBI para {symbol}: {e}")
     return 0.0
 
 def filtro_correlacion_btc():
@@ -99,7 +91,6 @@ def analizar_modelo_reversion(top_bruto):
 
         klines = obtener_klines(symbol, interval=INTERVALO_VELAS, limit=VELAS_PERIODO + 5)
         if not klines:
-            # Si falla la red, enviamos métricas vacías para que el bot no corte la lista
             perfiles_cuantificados.append({
                 "symbol": symbol, "price": precio_actual, "change_hour": activo.get("change_hour", 0.0),
                 "z_score": 0.0, "obi": 0.0, "reversion_signal": None, "mc_probability": 0.0
