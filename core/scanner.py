@@ -5,23 +5,13 @@ from liquidations import analizar_modelo_reversion
 from notifier import enviar_alerta_telegram
 
 def obtener_precios_actuales():
-    # URL actualizada al endpoint libre de restricciones de geolocalización en la nube
     url = "https://fapi.binance.vision/fapi/v1/ticker/price"
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=(3, 5))
         if response.status_code == 200:
             return {
                 item["symbol"]: float(item["price"]) 
                 for item in response.json() 
-                if item["symbol"].endswith("USDT") and "_" not in item["symbol"]
-            }
-        # Fallback de respaldo al dominio general de visión
-        url_alt = "https://data-api.binance.vision/api/v3/ticker/price"
-        response_alt = requests.get(url_alt, timeout=10)
-        if response_alt.status_code == 200:
-            return {
-                item["symbol"]: float(item["price"]) 
-                for item in response_alt.json() 
                 if item["symbol"].endswith("USDT") and "_" not in item["symbol"]
             }
     except Exception as e:
@@ -42,8 +32,14 @@ def ejecutar_motor_cuantitativo(umbral_zscore_base=2.2):
                 precios_base_hora.clear()
                 hora_actual_registrada = ahora.hour
 
+            # Problema corregido: Sintaxis de strftime corregida en el print
             print(f"\n--- Escaneo Cuantitativo Futuros USDT [{ahora.strftime('%Y-%m-%d %H:%M:%S')}] ---")
-            precios_actuales = obtener_precios_actuales()
+            
+            try:
+                precios_actuales = obtener_precios_actuales()
+            except Exception as net_err:
+                print(f"⚠️ Error recuperando precios de red: {net_err}")
+                precios_actuales = None
 
             if precios_actuales:
                 if not precios_base_hora:
@@ -63,13 +59,10 @@ def ejecutar_motor_cuantitativo(umbral_zscore_base=2.2):
                                 })
 
                     if ranking_bruto:
-                        # Seleccionamos el Top 20 por volatilidad para someterlos al modelo estadístico
                         ranking_bruto.sort(key=lambda x: abs(x["change_hour"]), reverse=True)
                         top_bruto = ranking_bruto[:20]
                         
                         perfiles_quant = analizar_modelo_reversion(top_bruto)
-                        
-                        # Prioridad absoluta: Si hay señal matemática de reversión a la media, va arriba
                         perfiles_quant.sort(key=lambda x: (x["reversion_signal"] is not None, abs(x["z_score"]) if x["z_score"] else 0), reverse=True)
                         top_10 = perfiles_quant[:10]
                         
@@ -77,8 +70,7 @@ def ejecutar_motor_cuantitativo(umbral_zscore_base=2.2):
                         
                         print("\n📊 REPORTE DEL MODELO CUANTITATIVO (TOP 10):")
                         if mercado_estable:
-                            print(f"💤 MERCADO EN EQUILIBRIO: Sin desviaciones estándar significativas (|Z| < {umbral_zscore_base}).")
-                            print("Mostrando los 10 activos con mayor actividad estocástica actual:\n")
+                            print(f"💤 MERCADO EN EQUILIBRIO: Sin desviaciones estándar significativas.")
                         else:
                             print(f"⚡ ANOMALÍA DETECTADA: Oportunidades de Reversión a la Media:\n")
 
@@ -102,15 +94,17 @@ def ejecutar_motor_cuantitativo(umbral_zscore_base=2.2):
                                 enviar_alerta_telegram(mensaje_telegram)
                             else:
                                 print(f"  🔹 {p['symbol']} | Cambio Hora: {p['change_hour']:+.2f}% | Precio: {p['price']} | Z-Score: {z_str} | OBI: {obi_str}")
+            else:
+                print("⚠️ No se pudieron obtener precios en este ciclo. Reintentando en el próximo intervalo...")
 
-            # Sincronización exacta con velas de 5 minutos de Binance
+            # Sincronización robusta de ciclos
             ahora_fin_ciclo = datetime.datetime.now()
             minuto_actual = ahora_fin_ciclo.minute
             minuto_base = (minuto_actual // 5) * 5
             proxima_vela = ahora_fin_ciclo.replace(minute=minuto_base, second=0, microsecond=0) + datetime.timedelta(minutes=5)
             segundos_espera = (proxima_vela - ahora_fin_ciclo).total_seconds()
             
-            print(f"\n⏳ Esperando {int(segundos_espera)}s al cierre de vela de las {proxima_vela.strftime('%H:%M:00')}...")
+            print(f"\n⏳ Esperando {int(segundos_espera)}s al siguiente ciclo...")
             time.sleep(max(1, segundos_espera))
 
     except KeyboardInterrupt:

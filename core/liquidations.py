@@ -1,67 +1,65 @@
 import requests
 import numpy as np
 
-# Configuración del modelo (Ventana de 20 velas en temporalidad de 15m = 5 horas)
 VELAS_PERIODO = 20
 INTERVALO_VELAS = "15m"
 SIMULACIONES_MC = 2000
-PASOS_FUTUROS = 12 # Proyectamos 12 velas (3 horas en TF 15m)
-PROBABILIDAD_MINIMA_MC = 70.0 # Porcentaje mínimo de éxito en Monte Carlo
+PASOS_FUTUROS = 12 
+PROBABILIDAD_MINIMA_MC = 70.0
 
 def obtener_klines(symbol, interval=INTERVALO_VELAS, limit=30):
-    """Obtiene el histórico de velas en temporalidad de 15m usando el endpoint libre de restricciones en la nube."""
-    url = f"https://dapi.binance.vision/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    try:
-        res = requests.get(url, timeout=10)
-        if res.status_code == 200:
-            return res.json()
-        # Fallback alternativo al endpoint general de visión si el dapi falla
-        url_alt = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        res_alt = requests.get(url_alt, timeout=10)
-        if res_alt.status_code == 200:
-            return res_alt.json()
-    except Exception:
-        pass
+    """Obtiene el histórico de velas con fallback automático si falla el DNS."""
+    endpoints = [
+        f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        f"https://fapi.binance.vision/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    ]
+    for url in endpoints:
+        try:
+            res = requests.get(url, timeout=(3, 5))
+            if res.status_code == 200:
+                return res.json()
+        except Exception:
+            continue
     return None
 
 def obtener_obi(symbol, limit=20):
-    """Consulta el Order Book de Binance y calcula el OBI real usando endpoints seguros para la nube."""
-    url = f"https://fapi.binance.vision/fapi/v1/depth?symbol={symbol}&limit={limit}"
-    try:
-        res = requests.get(url, timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            bids_vol = sum([float(item[1]) for item in data.get("bids", [])])
-            asks_vol = sum([float(item[1]) for item in data.get("asks", [])])
-            
-            total_vol = bids_vol + asks_vol
-            if total_vol == 0:
-                return 0.0
-            
-            obi = (bids_vol - asks_vol) / total_vol
-            return round(obi, 4)
-    except Exception:
-        pass
+    """Consulta el Order Book con fallback automático."""
+    endpoints = [
+        f"https://fapi.binance.com/fapi/v1/depth?symbol={symbol}&limit={limit}",
+        f"https://fapi.binance.vision/fapi/v1/depth?symbol={symbol}&limit={limit}"
+    ]
+    for url in endpoints:
+        try:
+            res = requests.get(url, timeout=(3, 5))
+            if res.status_code == 200:
+                data = res.json()
+                bids_vol = sum([float(item[1]) for item in data.get("bids", [])])
+                asks_vol = sum([float(item[1]) for item in data.get("asks", [])])
+                
+                total_vol = bids_vol + asks_vol
+                if total_vol == 0:
+                    return 0.0
+                return round((bids_vol - asks_vol) / total_vol, 4)
+        except Exception:
+            continue
     return 0.0
 
 def filtro_correlacion_btc():
-    """Verifica si BTC está en un movimiento direccional violento en TF 15m."""
     klines_btc = obtener_klines("BTCUSDT", interval=INTERVALO_VELAS, limit=5)
     if not klines_btc:
         return False
-    
     precio_inicio = float(klines_btc[0][4])
     precio_fin = float(klines_btc[-1][4])
-    variacion = abs((precio_fin - precio_inicio) / precio_inicio) * 100
-    
-    return variacion > 1.2 # Umbral ajustado para 15m
+    return abs((precio_fin - precio_inicio) / precio_inicio) * 100 > 1.2
 
 def simulacion_monte_carlo(precios_cierre, precio_actual, media_objetivo):
-    """Ejecuta simulación estocástica de Monte Carlo (GBM)."""
     retornos = np.diff(precios_cierre) / precios_cierre[:-1]
     mu = np.mean(retornos)
     sigma = np.std(retornos)
     
+    if sigma == 0:
+        return 0.0
+        
     dt = 1 
     exitos = 0
     distancia_media = abs(media_objetivo - precio_actual)
@@ -89,24 +87,27 @@ def simulacion_monte_carlo(precios_cierre, precio_actual, media_objetivo):
     return (exitos / SIMULACIONES_MC) * 100
 
 def analizar_modelo_reversion(top_bruto):
-    """Aplica filtros estadísticos basados en velas de 15m y calcula Monte Carlo para todos."""
     perfiles_cuantificados = []
     mercado_correlacionado = filtro_correlacion_btc()
 
     for activo in top_bruto:
         symbol = activo["symbol"]
-        precio_actual = activo["price"]
+        precio_actual = float(activo["price"])
         
         if mercado_correlacionado and symbol != "BTCUSDT":
             continue
 
         klines = obtener_klines(symbol, interval=INTERVALO_VELAS, limit=VELAS_PERIODO + 5)
         if not klines:
+            # Si falla la red, enviamos métricas vacías para que el bot no corte la lista
+            perfiles_cuantificados.append({
+                "symbol": symbol, "price": precio_actual, "change_hour": activo.get("change_hour", 0.0),
+                "z_score": 0.0, "obi": 0.0, "reversion_signal": None, "mc_probability": 0.0
+            })
             continue
             
         cierres = np.array([float(k[4]) for k in klines])
         volumenes = np.array([float(k[5]) for k in klines])
-        
         obi_val = obtener_obi(symbol)
         
         cierres_recientes = cierres[-VELAS_PERIODO:]
@@ -118,8 +119,6 @@ def analizar_modelo_reversion(top_bruto):
             
         z_score = (precio_actual - media) / desviacion
         senal = None
-        
-        # Calculamos la probabilidad de Monte Carlo para TODOS los activos del top
         prob_mc = simulacion_monte_carlo(cierres, precio_actual, media)
         
         if abs(z_score) >= 2.5:
@@ -131,21 +130,18 @@ def analizar_modelo_reversion(top_bruto):
             mecha_inferior = min(float(klines[-1][1]), float(klines[-1][4])) - float(klines[-1][3])
             cuerpo = abs(float(klines[-1][4]) - float(klines[-1][1]))
             
-            rechazo_bajista = mecha_superior > (cuerpo * 1.5)
-            rechazo_alcista = mecha_inferior > (cuerpo * 1.5)
-
-            if z_score <= -2.5 and agotamiento and rechazo_alcista and obi_val > -0.3:
+            if z_score <= -2.5 and agotamiento and mecha_inferior > (cuerpo * 1.5) and obi_val > -0.3:
                 if prob_mc >= PROBABILIDAD_MINIMA_MC:
                     senal = f"🟢 LONG SETUP (Reversión Alcista)"
                     
-            elif z_score >= 2.5 and agotamiento and rechazo_bajista and obi_val < 0.3:
+            elif z_score >= 2.5 and agotamiento and mecha_superior > (cuerpo * 1.5) and obi_val < 0.3:
                 if prob_mc >= PROBABILIDAD_MINIMA_MC:
                     senal = f"🔴 SHORT SETUP (Reversión Bajista)"
 
         perfiles_cuantificados.append({
             "symbol": symbol,
             "price": precio_actual,
-            "change_hour": activo["change_hour"],
+            "change_hour": activo.get("change_hour", 0.0),
             "z_score": z_score,
             "obi": obi_val,
             "reversion_signal": senal,
