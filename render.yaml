@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: binance-quant-bot
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python3 core/bot_server.py
-    envVars:
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false

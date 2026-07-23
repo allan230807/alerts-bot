@@ -1,105 +1,87 @@
 import os
-import telebot
-from dotenv import load_dotenv
-from users_db import registrar_usuario
-from liquidations import analizar_modelo_reversion
 import requests
-from telebot import types
+from dotenv import load_dotenv
+from liquidations import analizar_modelo_reversion
 
-# Construimos la ruta exacta hacia el archivo .env que está en la carpeta anterior (la raíz)
+# Cargar variables de entorno
 ruta_env = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
 load_dotenv(ruta_env) 
 
-# Cargar el token desde las variables de entorno
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 if not TOKEN:
     raise ValueError("⚠️ TELEGRAM_BOT_TOKEN no está definido en las variables de entorno.")
+if not CHAT_ID:
+    raise ValueError("⚠️ TELEGRAM_CHAT_ID no está definido en las variables de entorno.")
 
-bot = telebot.TeleBot(TOKEN)
-
-def obtener_precios_rapidos():
-    """Obtiene precios actuales para una consulta manual en /status."""
+def obtener_precios_actuales():
+    """Obtiene los precios actuales del mercado de futuros de Binance."""
     url = "https://fapi.binance.com/fapi/v1/ticker/price"
     try:
-        res = requests.get(url, timeout=5)
-        if res.status_code == 200:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
             return {
-                item["symbol"]: float(item["price"])
-                for item in res.json()
+                item["symbol"]: float(item["price"]) 
+                for item in response.json() 
                 if item["symbol"].endswith("USDT") and "_" not in item["symbol"]
             }
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"❌ Error de conexión en la API: {e}")
     return None
 
-@bot.message_handler(commands=['start'])
-def comando_start(message):
-    chat_id = message.chat.id
-    es_nuevo = registrar_usuario(chat_id)
+def enviar_alerta_telegram(texto):
+    """Envía el reporte completo directamente a tu chat de Telegram."""
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": texto,
+        "parse_mode": "Markdown"
+    }
+    try:
+        res = requests.post(url, json=payload, timeout=10)
+        if res.status_code == 200:
+            print("✅ Reporte enviado a Telegram con éxito.")
+        else:
+            print(f"❌ Error al enviar mensaje a Telegram: {res.text}")
+    except Exception as e:
+        print(f"❌ Excepción al conectar con Telegram: {e}")
+
+def main():
+    print("🚀 Ejecutando ciclo único del Motor Quant (TF: 15m | Ventana: 20 velas)...")
     
-    mensaje_bienvenida = (
-        "🤖 *¡Bienvenido al Bot Quant de Reversión a la Media!*\n\n"
-        "Usa los botones de abajo para interactuar sin necesidad de escribir comandos:"
-    )
-    
-    # Creamos el teclado de botones persistentes
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_status = types.KeyboardButton("📊 Estado / Ranking")
-    btn_help = types.KeyboardButton("🧠 Explicación del Modelo")
-    markup.add(btn_status, btn_help)
-    
-    bot.reply_to(message, mensaje_bienvenida, parse_mode="Markdown", reply_markup=markup)
-    if es_nuevo:
-        print(f"👤 Nuevo usuario registrado: {chat_id}")
-@bot.message_handler(func=lambda message: True)
-def responder_botones(message):
-    texto = message.text
-    if texto == "📊 Estado / Ranking":
-        # Llamamos a la misma lógica del comando ranking
-        comando_status(message)
-    elif texto == "🧠 Explicación del Modelo":
-        comando_help(message)
-    else:
-        bot.reply_to(message, "Usa los botones del menú inferior para interactuar. 📉📈")
-@bot.message_handler(commands=['status', 'ranking'])
-def comando_status(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    
-    precios_actuales = obtener_precios_rapidos()
+    precios_actuales = obtener_precios_actuales()
     if not precios_actuales:
-        bot.reply_to(message, "❌ Error al conectar con Binance. Intenta de nuevo en unos segundos.")
+        enviar_alerta_telegram("❌ *Error:* El bot falló al conectar con la API de Binance en este ciclo.")
         return
         
-    # Como estamos bajo demanda, simulamos un ranking base rápido por volatilidad
-    ranking_bruto = []
-    for simbolo, precio_actual in precios_actuales.items():
-        ranking_bruto.append({
-            "symbol": simbolo,
-            "change_hour": 0.0, # Valor por defecto para consulta rápida
-            "price": precio_actual
-        })
+    ranking_bruto = [
+        {"symbol": simbolo, "change_hour": 0.0, "price": precio_actual}
+        for simbolo, precio_actual in precios_actuales.items()
+    ]
     
     if not ranking_bruto:
-        bot.reply_to(message, "❌ No se pudieron obtener precios en este momento.")
+        print("❌ No se pudieron obtener precios.")
         return
 
-    # Tomamos el Top 20 para someterlos al modelo estadístico de reversión
-    top_bruto = ranking_bruto[:20]
+    top_bruto = ranking_bruto[:25]
+    
+    # Análisis aplicando la ventana de 15m
     perfiles_quant = analizar_modelo_reversion(top_bruto)
     
-    # Ordenamos con la misma lógica del escáner
+    # Ordenamos priorizando señales activas y luego magnitud de Z-Score
     perfiles_quant.sort(key=lambda x: (x["reversion_signal"] is not None, abs(x["z_score"]) if x["z_score"] else 0), reverse=True)
     top_10 = perfiles_quant[:10]
     
     mercado_estable = all(p["reversion_signal"] is None for p in top_10)
     
-    texto = "📊 *REPORTE DEL MODELO CUANTITATIVO (TOP 10):*\n\n"
+    # Construcción del reporte detallado para Telegram
+    texto = "📊 *REPORTE QUANT (TEMPORALIDAD 15M)*\n\n"
     if mercado_estable:
-        texto += "💤 *MERCADO EN EQUILIBRIO:* Sin desviaciones estándar significativas (|Z| < 2.2).\n"
-        texto += "Mostrando los 10 activos con mayor actividad estocástica actual:\n\n"
+        texto += "💤 *Mercado en equilibrio:* Sin desviaciones extremas (|Z| < 2.5).\n"
+        texto += "Mostrando Top 10 con su respectiva probabilidad de reversión (Monte Carlo):\n\n"
     else:
-        texto += "⚡ *ANOMALÍA DETECTADA:* Oportunidades de Reversión a la Media:\n\n"
+        texto += "⚡ *¡ANOMALÍA DETECTADA!* Oportunidades y métricas del Top 10:\n\n"
 
     for p in top_10:
         z_str = f"{p['z_score']:+.2f}σ" if p['z_score'] is not None else "N/A"
@@ -107,23 +89,16 @@ def comando_status(message):
         prob_mc = p.get("mc_probability", 0.0)
         
         if p["reversion_signal"]:
-            texto += f"  🚨 *{p['reversion_signal']}*\n"
-            texto += f"    ↳ `{p['symbol']}` | Precio: `{p['price']}` | Z: `{z_str}` | OBI: `{obi_str}` | Prob MC: `{prob_mc:.1f}%`\n\n"
+            texto += f"🚨 *{p['reversion_signal']}*\n"
         else:
-            texto += f"  🔹 `{p['symbol']}` | Precio: `{p['price']}` | Z: `{z_str}` | OBI: `{obi_str}`\n"
+            texto += f"🔹 Activo: `{p['symbol']}`\n"
+            
+        texto += f"  • Precio: `{p['price']}`\n"
+        texto += f"  • Z-Score: `{z_str}` | OBI: `{obi_str}`\n"
+        texto += f"  • Prob. Reversión (Monte Carlo): `{prob_mc:.1f}%`\n\n"
 
-    bot.reply_to(message, texto, parse_mode="Markdown")
-
-@bot.message_handler(commands=['help'])
-def comando_help(message):
-    texto = (
-        "🧠 *¿Cómo funciona el Modelo Quant?*\n\n"
-        "1. *Z-Score:* Identifica precios alejados a más de 2.5 desviaciones estándar de su media de 20 periodos.\n"
-        "2. *Volume Exhaustion:* Valida que el volumen de la última vela se reduzca, indicando agotamiento institucional.\n"
-        "3. *Monte Carlo (2,000 iteraciones):* Simula trayectorias de precios futuras mediante Movimiento Browniano Geométrico. Solo si la probabilidad de éxito supera el 70%, se emite la señal."
-    )
-    bot.reply_to(message, texto, parse_mode="Markdown")
+    enviar_alerta_telegram(texto)
+    print("🏁 Ciclo de análisis finalizado con éxito.")
 
 if __name__ == "__main__":
-    print("🤖 Bot de Telegram escuchando comandos (/start, /status, /help)...")
-    bot.infinity_polling()
+    main()
